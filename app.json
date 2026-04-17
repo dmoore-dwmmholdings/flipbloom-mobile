@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Flipbloom",
+    "slug": "flipbloom",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "flipbloom",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "icon": "./assets/icon.png",
+    "ios": {
+      "bundleIdentifier": "com.dwmmholdings.flipbloom",
+      "supportsTablet": false
+    },
+    "android": {
+      "package": "com.dwmmholdings.flipbloom",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#151314"
+      }
+    },
+    "splash": {
+      "image": "./assets/splash.png",
+      "backgroundColor": "#151314"
+    },
+    "plugins": [],
+    "updates": {
+      "url": "https://u.expo.dev/3b93bc38-7244-4e7a-b032-a239c901eabc"
+    },
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3b93bc38-7244-4e7a-b032-a239c901eabc"
+      }
+    },
+    "owner": "dmoore12710",
+    "jsEngine": "jsc"
+  }
+}
