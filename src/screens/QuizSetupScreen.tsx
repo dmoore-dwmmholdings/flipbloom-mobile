@@ -17,7 +17,7 @@ import { Check } from 'lucide-react-native'
 import { generateQuiz } from '../lib/api'
 import { colors } from '../lib/colors'
 import type { RootStackParamList } from '../navigation/types'
-import LoadingSpinner from '../components/LoadingSpinner'
+import { useGeneration } from '../lib/GenerationContext'
 
 type Nav = NativeStackNavigationProp<RootStackParamList>
 type Route = RouteProp<RootStackParamList, 'QuizSetup'>
@@ -36,7 +36,7 @@ export default function QuizSetupScreen() {
   const [count, setCount] = useState(10)
   const [selectedTypes, setSelectedTypes] = useState<string[]>(['multiple_choice'])
   const [customText, setCustomText] = useState('')
-  const [loading, setLoading] = useState(false)
+  const { startGeneration, updateStep, resolveGeneration, failGeneration } = useGeneration()
 
   const toggleType = (typeId: string) => {
     setSelectedTypes((prev) =>
@@ -44,7 +44,7 @@ export default function QuizSetupScreen() {
     )
   }
 
-  const handleGenerate = async () => {
+  const handleGenerate = () => {
     if (selectedTypes.length === 0) {
       Alert.alert('Error', 'Select at least one question type.')
       return
@@ -54,32 +54,23 @@ export default function QuizSetupScreen() {
       return
     }
 
-    setLoading(true)
-    try {
-      const result = await generateQuiz({
-        deckId,
-        text: customText.trim() || undefined,
-        count,
-        types: selectedTypes,
-      })
-      navigation.navigate('QuizSession', {
-        questions: result.questions,
-        quizTitle: deckTitle ?? result.deckTitle ?? 'Quiz',
-      })
-    } catch (e) {
-      const err = e as Error
-      Alert.alert('Error', err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
+    const genId = String(Date.now())
+    const title = deckTitle ? `Quiz: ${deckTitle}` : 'Generating quiz…'
+    startGeneration(genId, title)
+    updateStep(genId, 'Generating with AI…')
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <LoadingSpinner fullScreen />
-      </SafeAreaView>
-    )
+    generateQuiz({ deckId, text: customText.trim() || undefined, count, types: selectedTypes })
+      .then(result => {
+        // Quiz results go directly to session — resolve with a placeholder id
+        resolveGeneration(genId, 'quiz')
+        navigation.navigate('QuizSession', {
+          questions: result.questions,
+          quizTitle: deckTitle ?? result.deckTitle ?? 'Quiz',
+        })
+      })
+      .catch((e: Error) => failGeneration(genId, e.message || 'Quiz generation failed'))
+
+    navigation.goBack()
   }
 
   return (

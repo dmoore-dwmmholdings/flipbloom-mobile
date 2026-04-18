@@ -2,6 +2,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { NavigationContainer } from '@react-navigation/native'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider } from './src/lib/AuthContext'
+import { GenerationProvider } from './src/lib/GenerationContext'
 import RootNavigator from './src/navigation/RootNavigator'
 
 export default function App() {
@@ -9,9 +10,11 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AuthProvider>
-          <NavigationContainer>
-            <RootNavigator />
-          </NavigationContainer>
+          <GenerationProvider>
+            <NavigationContainer>
+              <RootNavigator />
+            </NavigationContainer>
+          </GenerationProvider>
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

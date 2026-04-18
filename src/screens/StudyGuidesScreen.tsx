@@ -19,6 +19,7 @@ import { Plus, BookMarked } from 'lucide-react-native'
 import { getDocs, query, where, collection, db, addDoc, serverTimestamp } from '../lib/firebase'
 import { generateStudyGuide } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
+import { useGeneration } from '../lib/GenerationContext'
 import { colors } from '../lib/colors'
 import type { StudyGuide, Deck, PRO_GUIDE_LIMIT, MAX_GUIDE_LIMIT } from '../lib/types'
 import { PRO_GUIDE_LIMIT as PRO_LIMIT, MAX_GUIDE_LIMIT as MAX_LIMIT } from '../lib/types'
@@ -35,8 +36,8 @@ export default function StudyGuidesScreen() {
   const [guides, setGuides] = useState<StudyGuide[]>([])
   const [decks, setDecks] = useState<Deck[]>([])
   const [loading, setLoading] = useState(true)
-  const [generating, setGenerating] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
+  const { startGeneration, updateStep, resolveGeneration, failGeneration } = useGeneration()
 
   // Form state
   const [sourceType, setSourceType] = useState<SourceType>('text')
@@ -69,7 +70,7 @@ export default function StudyGuidesScreen() {
     }, [fetchData])
   )
 
-  const handleGenerate = async () => {
+  const handleGenerate = () => {
     if (sourceType === 'text' && !text.trim()) {
       Alert.alert('Error', 'Please enter some text content.')
       return
@@ -79,33 +80,32 @@ export default function StudyGuidesScreen() {
       return
     }
 
+    const genId = String(Date.now())
+    const title = guideTitle.trim() || 'Study Guide'
+    startGeneration(genId, title)
+    updateStep(genId, 'Generating with AI…')
     setModalVisible(false)
-    setGenerating(true)
-    try {
-      const result = await generateStudyGuide({
-        text: sourceType === 'text' ? text.trim() : undefined,
-        deckId: sourceType === 'deck' ? selectedDeckId ?? undefined : undefined,
-        title: guideTitle.trim() || undefined,
-      })
 
-      // Save guide to Firestore
-      const guideRef = await addDoc(collection(db, 'studyGuides'), {
-        uid: user!.uid,
-        title: result.title,
-        sourceType,
-        content: result.content,
-        topicId: null,
-        topicName: null,
-        createdAt: serverTimestamp(),
+    generateStudyGuide({
+      text: sourceType === 'text' ? text.trim() : undefined,
+      deckId: sourceType === 'deck' ? selectedDeckId ?? undefined : undefined,
+      title: guideTitle.trim() || undefined,
+    })
+      .then(result => {
+        return addDoc(collection(db, 'studyGuides'), {
+          uid: user!.uid,
+          title: result.title,
+          sourceType,
+          content: result.content,
+          topicId: null,
+          topicName: null,
+          createdAt: serverTimestamp(),
+        }).then(guideRef => {
+          resolveGeneration(genId, guideRef.id)
+          void fetchData()
+        })
       })
-
-      navigation.navigate('StudyGuideView', { guideId: guideRef.id })
-    } catch (e) {
-      const err = e as Error
-      Alert.alert('Error', err.message)
-    } finally {
-      setGenerating(false)
-    }
+      .catch((e: Error) => failGeneration(genId, e.message || 'Guide generation failed'))
   }
 
   const renderGuide = ({ item }: { item: StudyGuide }) => {
@@ -132,14 +132,7 @@ export default function StudyGuidesScreen() {
 
   // Free users see the tab but can't generate
 
-  if (generating) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <LoadingSpinner fullScreen />
-        <Text style={styles.generatingText}>Generating study guide...</Text>
-      </SafeAreaView>
-    )
-  }
+
 
   return (
     <SafeAreaView style={styles.safe}>

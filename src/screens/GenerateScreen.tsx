@@ -6,8 +6,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Modal,
-  Alert,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native'
@@ -20,34 +18,81 @@ import { File, FileText } from 'lucide-react-native'
 import { addDoc, collection, db, serverTimestamp, getDocs, query, where } from '../lib/firebase'
 import { generateFlashcards, generateFromFile } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
+import { useGeneration } from '../lib/GenerationContext'
 import { colors } from '../lib/colors'
 import type { RootStackParamList } from '../navigation/types'
-import LoadingSpinner from '../components/LoadingSpinner'
 
 type Nav = NativeStackNavigationProp<RootStackParamList>
+
+async function saveDeckToFirestore(
+  currentUser: { uid: string } | null,
+  cards: { front: string; back: string }[],
+  deckTitle: string,
+  topicName: string | null,
+  existingTopicsList: string[]
+): Promise<string> {
+  if (!currentUser) throw new Error('No user')
+
+  let topicId: string | null = null
+  let topicNameFinal: string | null = null
+
+  if (topicName) {
+    const topicSnap = await getDocs(
+      query(collection(db, 'topics'), where('uid', '==', currentUser.uid), where('name', '==', topicName))
+    )
+    if (!topicSnap.empty) {
+      topicId = topicSnap.docs[0].id
+      topicNameFinal = topicName
+    } else {
+      const topicColors = ['#ed674a', '#f49f48', '#4ade80', '#60a5fa', '#a78bfa', '#f472b6']
+      const color = topicColors[existingTopicsList.length % topicColors.length]
+      const newTopic = await addDoc(collection(db, 'topics'), {
+        uid: currentUser.uid,
+        name: topicName,
+        color,
+        createdAt: serverTimestamp(),
+      })
+      topicId = newTopic.id
+      topicNameFinal = topicName
+    }
+  }
+
+  const deckRef = await addDoc(collection(db, 'decks'), {
+    uid: currentUser.uid,
+    title: deckTitle,
+    cardCount: cards.length,
+    topicId,
+    topicName: topicNameFinal,
+    createdAt: serverTimestamp(),
+  })
+
+  await Promise.all(cards.map((card, idx) =>
+    addDoc(collection(db, 'cards'), {
+      uid: currentUser.uid,
+      deckId: deckRef.id,
+      front: card.front,
+      back: card.back,
+      order: idx,
+    })
+  ))
+
+  return deckRef.id
+}
 
 export default function GenerateScreen() {
   const { user } = useAuth()
   const navigation = useNavigation<Nav>()
+  const { startGeneration, updateStep, resolveGeneration, failGeneration } = useGeneration()
+
   const [tab, setTab] = useState<'text' | 'file'>('text')
   const [text, setText] = useState('')
   const [count, setCount] = useState(10)
   const [title, setTitle] = useState('')
   const [answerMode, setAnswerMode] = useState<'brief' | 'detailed'>('brief')
   const [selectedFile, setSelectedFile] = useState<{ name: string; uri: string; mimeType: string } | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [progressText, setProgressText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [existingTitles, setExistingTitles] = useState<string[]>([])
   const [existingTopics, setExistingTopics] = useState<string[]>([])
-
-  // Topic suggestion modal
-  const [suggestedTitle, setSuggestedTitle] = useState<string | null>(null)
-  const [suggestedTopic, setSuggestedTopic] = useState<string | null>(null)
-  const [pendingCards, setPendingCards] = useState<{ front: string; back: string }[]>([])
-  const [modalVisible, setModalVisible] = useState(false)
-  const [finalTitle, setFinalTitle] = useState('')
-  const [finalTopic, setFinalTopic] = useState('')
 
   useEffect(() => {
     const fetchExisting = async () => {
@@ -82,6 +127,7 @@ export default function GenerateScreen() {
 
   const handleGenerate = async () => {
     setError(null)
+
     if (tab === 'text' && !text.trim()) {
       setError('Please paste some text content.')
       return
@@ -91,137 +137,71 @@ export default function GenerateScreen() {
       return
     }
 
-    setLoading(true)
-    setProgressText(tab === 'file' ? 'Reading file…' : 'Analyzing content…')
-    try {
-      let result: { cards: { front: string; back: string }[]; suggestedTitle: string | null; suggestedTopicName?: string | null }
+    const genId = String(Date.now())
+    const titleHint = title.trim() || (tab === 'file' ? selectedFile?.name?.replace(/\.[^.]+$/, '') || '' : '')
+    startGeneration(genId, titleHint || 'Generating deck…')
+    updateStep(genId, tab === 'file' ? 'Reading file…' : 'Analyzing text…')
 
-      if (tab === 'text') {
-        setProgressText('Sending to AI…')
-        result = await generateFlashcards({
-          text: text.trim(),
-          count,
-          title: title.trim() || undefined,
-          existingTitles,
-          existingTopics,
-          answerMode,
-        })
-      } else {
-        const file = new FSFile(selectedFile!.uri)
-        setProgressText('Reading file…')
+    // Capture for closure
+    const currentUser = user
+    const currentExistingTopics = existingTopics
+    const currentExistingTitles = existingTitles
+
+    try {
+      let filePayloads: { fileData: string; mimeType: string; name: string }[] = []
+
+      if (tab === 'file' && selectedFile) {
+        const file = new FSFile(selectedFile.uri)
         const base64 = await file.base64()
-        setProgressText('Sending to AI…')
-        result = await generateFromFile({
-          files: [{ fileData: base64, mimeType: selectedFile!.mimeType, name: selectedFile!.name }],
-          count,
-          title: title.trim() || undefined,
-          existingTitles,
-          existingTopics,
-          answerMode,
-        })
+        filePayloads = [{ fileData: base64, mimeType: selectedFile.mimeType, name: selectedFile.name }]
       }
 
-      setProgressText('Cards ready!')
-      setPendingCards(result.cards)
-      setSuggestedTitle(result.suggestedTitle)
-      setSuggestedTopic(result.suggestedTopicName ?? null)
-      setFinalTitle(title.trim() || result.suggestedTitle || '')
-      setFinalTopic(result.suggestedTopicName ?? '')
-      setModalVisible(true)
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      setError(message)
-    } finally {
-      setLoading(false)
-      setProgressText('')
-    }
-  }
+      updateStep(genId, 'Sending to AI…')
 
-  const handleSaveDeck = async (topicDecision: 'accept' | 'rename' | 'skip') => {
-    if (!user) return
-    setModalVisible(false)
-    setLoading(true)
-    try {
-      let topicId: string | null = null
-      let topicName: string | null = null
-
-      if (topicDecision !== 'skip' && finalTopic.trim()) {
-        // Find or create topic
-        const topicSnap = await getDocs(
-          query(collection(db, 'topics'), where('uid', '==', user.uid), where('name', '==', finalTopic.trim()))
-        )
-        if (!topicSnap.empty) {
-          topicId = topicSnap.docs[0].id
-          topicName = finalTopic.trim()
-        } else {
-          const topicColors = ['#ed674a', '#f49f48', '#4ade80', '#60a5fa', '#a78bfa', '#f472b6']
-          const color = topicColors[existingTopics.length % topicColors.length]
-          const newTopic = await addDoc(collection(db, 'topics'), {
-            uid: user.uid,
-            name: finalTopic.trim(),
-            color,
-            createdAt: serverTimestamp(),
+      // Start API call without awaiting
+      const apiPromise = tab === 'text'
+        ? generateFlashcards({
+            text: text.trim(),
+            count,
+            title: titleHint || undefined,
+            existingTitles: currentExistingTitles,
+            existingTopics: currentExistingTopics,
+            answerMode,
           })
-          topicId = newTopic.id
-          topicName = finalTopic.trim()
-        }
-      }
+        : generateFromFile({
+            files: filePayloads,
+            count,
+            title: titleHint || undefined,
+            existingTitles: currentExistingTitles,
+            existingTopics: currentExistingTopics,
+            answerMode,
+          })
 
-      const deckRef = await addDoc(collection(db, 'decks'), {
-        uid: user.uid,
-        title: finalTitle.trim() || 'Untitled Deck',
-        cardCount: pendingCards.length,
-        topicId,
-        topicName,
-        createdAt: serverTimestamp(),
-      })
-
-      const cardPromises = pendingCards.map((card, idx) =>
-        addDoc(collection(db, 'cards'), {
-          uid: user.uid,
-          deckId: deckRef.id,
-          front: card.front,
-          back: card.back,
-          order: idx,
+      apiPromise
+        .then(async (result) => {
+          const finalTitle = titleHint || result.suggestedTitle || 'Untitled Deck'
+          const deckId = await saveDeckToFirestore(
+            currentUser,
+            result.cards,
+            finalTitle,
+            result.suggestedTopicName ?? null,
+            currentExistingTopics
+          )
+          resolveGeneration(genId, deckId)
         })
-      )
-      await Promise.all(cardPromises)
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err)
+          failGeneration(genId, message)
+        })
 
-      navigation.navigate('Deck', { deckId: deckRef.id })
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      Alert.alert('Error', message)
-    } finally {
-      setLoading(false)
+      // Navigate immediately to Library tab
+      navigation.navigate('Main' as keyof RootStackParamList)
+    } catch (err: unknown) {
+      // Error before API call (e.g. file read error)
+      const message = err instanceof Error ? err.message : String(err)
+      setError(message)
+      failGeneration(genId, message)
     }
-  }
-
-  if (loading) {
-    const steps = [
-      { label: 'Reading content', done: progressText !== 'Reading file…' && progressText !== 'Analyzing content…' },
-      { label: 'Sending to AI', done: progressText === 'Cards ready!' },
-      { label: 'Building cards', done: progressText === 'Cards ready!' },
-    ]
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.loadingContainer}>
-          <LoadingSpinner />
-          <Text style={styles.loadingTitle}>{progressText || 'Working…'}</Text>
-          <Text style={styles.loadingSubtitle}>
-            {count} card{count !== 1 ? 's' : ''} · {answerMode === 'brief' ? 'Brief answers' : 'Detailed answers'}
-          </Text>
-          <View style={styles.stepsRow}>
-            {steps.map((s, i) => (
-              <View key={i} style={styles.stepItem}>
-                <View style={[styles.stepDot, s.done && styles.stepDotDone]} />
-                <Text style={[styles.stepLabel, s.done && styles.stepLabelDone]}>{s.label}</Text>
-              </View>
-            ))}
-          </View>
-          <Text style={styles.loadingHint}>You can switch tabs — this will finish in the background.</Text>
-        </View>
-      </SafeAreaView>
-    )
   }
 
   return (
@@ -326,50 +306,6 @@ export default function GenerateScreen() {
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
-
-      <Modal visible={modalVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Save Deck</Text>
-
-            <Text style={styles.modalLabel}>Deck Title</Text>
-            <TextInput
-              style={styles.input}
-              value={finalTitle}
-              onChangeText={setFinalTitle}
-              placeholder="Deck title"
-              placeholderTextColor={colors.textMuted}
-            />
-
-            {suggestedTopic ? (
-              <>
-                <Text style={styles.modalLabel}>Suggested Topic: <Text style={{ color: colors.coral }}>{suggestedTopic}</Text></Text>
-                <TextInput
-                  style={styles.input}
-                  value={finalTopic}
-                  onChangeText={setFinalTopic}
-                  placeholder="Topic name (or leave blank to skip)"
-                  placeholderTextColor={colors.textMuted}
-                />
-              </>
-            ) : null}
-
-            <Text style={styles.cardPreview}>{pendingCards.length} cards generated</Text>
-
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.primaryBtn}
-                onPress={() => handleSaveDeck(finalTopic.trim() ? 'accept' : 'skip')}
-              >
-                <Text style={styles.primaryBtnText}>Save Deck</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.secondaryBtn} onPress={() => setModalVisible(false)}>
-                <Text style={styles.secondaryBtnText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   )
 }
@@ -459,88 +395,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   generateBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },
-  loadingText: {
-    position: 'absolute',
-    bottom: 80,
-    alignSelf: 'center',
-    color: colors.textMuted,
-    fontSize: 15,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32,
-    gap: 8,
-  },
-  loadingTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-    textAlign: 'center',
-    marginTop: 16,
-  },
-  loadingSubtitle: {
-    fontSize: 13,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  stepsRow: {
-    flexDirection: 'row',
-    gap: 20,
-    marginVertical: 16,
-    alignItems: 'center',
-  },
-  stepItem: { alignItems: 'center', gap: 6 },
-  stepDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  stepDotDone: { backgroundColor: colors.coral, borderColor: colors.coral },
-  stepLabel: { fontSize: 11, color: colors.textMuted },
-  stepLabelDone: { color: colors.coral },
-  loadingHint: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.3)',
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'flex-end',
-  },
-  modalCard: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 24,
-    gap: 14,
-  },
-  modalTitle: { fontSize: 20, fontWeight: '800', color: colors.text },
-  modalLabel: { fontSize: 14, color: colors.textMuted },
-  cardPreview: { fontSize: 14, color: colors.coral, fontWeight: '600' },
-  modalActions: { gap: 10 },
-  primaryBtn: {
-    height: 52,
-    backgroundColor: colors.coral,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },
-  secondaryBtn: {
-    height: 52,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  secondaryBtnText: { fontSize: 16, fontWeight: '600', color: colors.textMuted },
 })
