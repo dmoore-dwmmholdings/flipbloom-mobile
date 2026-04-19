@@ -37,6 +37,9 @@ export interface FlashCard {
   order: number
 }
 
+/** Alias used in quiz screens where deckId context is implicit */
+export type Card = FlashCard
+
 export interface Topic {
   id: string
   uid: string

@@ -16,6 +16,8 @@ import StudySessionDetailScreen from '../screens/StudySessionDetailScreen'
 import PricingScreen from '../screens/PricingScreen'
 import StudyGuideViewScreen from '../screens/StudyGuideViewScreen'
 import StudyCompleteScreen from '../screens/StudyCompleteScreen'
+import BasicQuizScreen from '../screens/BasicQuizScreen'
+import BasicQuizResultsScreen from '../screens/BasicQuizResultsScreen'
 
 const Stack = createNativeStackNavigator<RootStackParamList>()
 
@@ -129,6 +131,8 @@ export default function RootNavigator() {
             component={StudyCompleteScreen}
             options={{ headerShown: false }}
           />
+          <Stack.Screen name="BasicQuiz" component={BasicQuizScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="BasicQuizResults" component={BasicQuizResultsScreen} options={{ headerShown: false }} />
         </>
       )}
     </Stack.Navigator>

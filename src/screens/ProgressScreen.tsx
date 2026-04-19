@@ -115,7 +115,7 @@ export default function ProgressScreen() {
                   </View>
                 </View>
                 <Text style={styles.sessionPct}>
-                  {Math.round((s.knownCount / s.totalCards) * 100)}%
+                  {Math.round((s.knownCount / (s.totalCards || 1)) * 100)}%
                 </Text>
               </TouchableOpacity>
             )
@@ -127,8 +127,8 @@ export default function ProgressScreen() {
                   <Text style={styles.sessionTitle} numberOfLines={1}>{q.quizTitle}</Text>
                   <Text style={styles.sessionDate}>{formatDate(q.createdAt)}</Text>
                 </View>
-                <Text style={[styles.sessionPct, q.score / q.totalQuestions >= 0.7 ? styles.scorePctGood : styles.scorePctBad]}>
-                  {Math.round((q.score / q.totalQuestions) * 100)}%
+                <Text style={[styles.sessionPct, q.score / (q.totalQuestions || 1) >= 0.7 ? styles.scorePctGood : styles.scorePctBad]}>
+                  {Math.round((q.score / (q.totalQuestions || 1)) * 100)}%
                 </Text>
               </View>
             )

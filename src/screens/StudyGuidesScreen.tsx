@@ -139,7 +139,6 @@ export default function StudyGuidesScreen() {
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Study Guides</Text>
-          <Text style={{ fontSize: 10, color: '#666', marginTop: 2 }}>build v2</Text>
           <Text style={styles.usage}>
             {guides.length} / {guideLimit} guides used
           </Text>

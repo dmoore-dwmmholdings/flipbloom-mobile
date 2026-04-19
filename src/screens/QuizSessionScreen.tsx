@@ -8,11 +8,12 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
-import { saveQuizSession } from '../lib/api'
+import { saveQuizSession, judgeAnswer } from '../lib/api'
 import { colors } from '../lib/colors'
 import type { QuizAnswer } from '../lib/types'
 import type { RootStackParamList } from '../navigation/types'
@@ -31,6 +32,7 @@ export default function QuizSessionScreen() {
   const [freeFormText, setFreeFormText] = useState('')
   const [submitted, setSubmitted] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [judging, setJudging] = useState(false)
 
   const question = questions[currentIndex]
   const progress = currentIndex / questions.length
@@ -42,12 +44,36 @@ export default function QuizSessionScreen() {
 
   const handleSubmitAnswer = async (answer: string) => {
     if (submitted) return
-    const isCorrect = answer.trim().toLowerCase() === question.correct.toLowerCase()
+
+    let isCorrect: boolean
+    let feedback: string | null = null
+
+    if (question.type === 'multiple_choice') {
+      isCorrect = answer.trim().toLowerCase() === question.correct.toLowerCase()
+    } else {
+      // Short answer — use judgeAnswer API
+      setJudging(true)
+      try {
+        const result = await judgeAnswer({
+          question: question.question,
+          correctAnswer: question.correct,
+          userAnswer: answer,
+        })
+        isCorrect = result.result
+        feedback = result.feedback
+      } catch {
+        // Fall back to string comparison on error
+        isCorrect = answer.trim().toLowerCase() === question.correct.toLowerCase()
+      } finally {
+        setJudging(false)
+      }
+    }
+
     const newAnswer: QuizAnswer = {
       questionId: question.id,
       userAnswer: answer,
       correct: isCorrect,
-      feedback: null,
+      feedback,
     }
     const newAnswers = [...answers, newAnswer]
     setAnswers(newAnswers)
@@ -222,6 +248,13 @@ export default function QuizSessionScreen() {
             </View>
           )}
 
+          {judging && (
+            <View style={styles.judgingIndicator}>
+              <ActivityIndicator size="small" color={colors.coral} />
+              <Text style={styles.judgingText}>Checking your answer…</Text>
+            </View>
+          )}
+
           {submitted && question.explanation ? (
             <View style={styles.explanation}>
               <Text style={styles.explanationLabel}>Explanation</Text>
@@ -290,6 +323,8 @@ const styles = StyleSheet.create({
   freeFormResult: { gap: 8 },
   correctLabel: { fontSize: 12, color: colors.textMuted, fontWeight: '600' },
   correctAnswer: { fontSize: 15, color: colors.text, fontWeight: '600' },
+  judgingIndicator: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
+  judgingText: { fontSize: 13, color: colors.textMuted },
   judgeBadge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, alignSelf: 'flex-start' },
   judgeBadgeGreen: { backgroundColor: '#4ade8022' },
   judgeBadgeRed: { backgroundColor: colors.danger + '22' },

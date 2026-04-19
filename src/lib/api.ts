@@ -142,6 +142,16 @@ export const createCheckout = (data: {
 export const purchaseCredits = (data: { quantity: number }) =>
   callApi<{ url: string }>('purchaseCredits', data as unknown as Record<string, unknown>)
 
+export const judgeAnswer = (data: {
+  question: string
+  correctAnswer: string
+  userAnswer: string
+}) =>
+  callApi<{ result: boolean; feedback: string }>(
+    'judgeAnswer',
+    data as unknown as Record<string, unknown>
+  )
+
 export const submitFeedback = (data: {
   uid?: string
   email?: string

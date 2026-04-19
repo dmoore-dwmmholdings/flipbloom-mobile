@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Alert,
   TextInput,
+  Animated,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
@@ -53,12 +54,44 @@ const TOPIC_COLORS = [
 export default function DashboardScreen() {
   const { user, profile } = useAuth()
   const navigation = useNavigation<Nav>()
-  const { active, dismissGeneration } = useGeneration()
+  const { active, completedAt, dismissGeneration } = useGeneration()
   const [decks, setDecks] = useState<Deck[]>([])
   const [topics, setTopics] = useState<Topic[]>([])
+  const [deckQuizMap, setDeckQuizMap] = useState<Record<string, boolean>>({})
   const [selectedTopic, setSelectedTopic] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+
+  // Generation modal — elapsed timer + progress bar
+  const [elapsedSec, setElapsedSec] = useState(0)
+  const genProgressAnim = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    if (active?.status === 'generating') {
+      setElapsedSec(0)
+      genProgressAnim.setValue(0)
+      Animated.timing(genProgressAnim, {
+        toValue: 0.85,
+        duration: 45000,
+        useNativeDriver: false,
+      }).start()
+    } else if (active?.status === 'done') {
+      Animated.timing(genProgressAnim, {
+        toValue: 1,
+        duration: 400,
+        useNativeDriver: false,
+      }).start()
+    }
+  }, [active?.status])
+
+  useEffect(() => {
+    if (active?.status !== 'generating') return
+    const interval = setInterval(() => {
+      if (!active?.startedAt) return
+      setElapsedSec(Math.round((Date.now() - active.startedAt) / 1000))
+    }, 500)
+    return () => clearInterval(interval)
+  }, [active?.status, active?.startedAt])
 
   // Topic creation modal state
   const [topicModalVisible, setTopicModalVisible] = useState(false)
@@ -68,9 +101,10 @@ export default function DashboardScreen() {
   const fetchData = useCallback(async () => {
     if (!user) return
     try {
-      const [deckSnap, topicSnap] = await Promise.all([
+      const [deckSnap, topicSnap, quizSnap] = await Promise.all([
         getDocs(query(collection(db, 'decks'), where('uid', '==', user.uid))),
         getDocs(query(collection(db, 'topics'), where('uid', '==', user.uid))),
+        getDocs(query(collection(db, 'savedQuizzes'), where('uid', '==', user.uid))),
       ])
       const deckList = deckSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Deck))
       deckList.sort((a, b) => {
@@ -80,6 +114,12 @@ export default function DashboardScreen() {
       })
       setDecks(deckList)
       setTopics(topicSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Topic)))
+      const quizMap: Record<string, boolean> = {}
+      quizSnap.docs.forEach((d) => {
+        const data = d.data() as { deckId?: string }
+        if (data.deckId) quizMap[data.deckId] = true
+      })
+      setDeckQuizMap(quizMap)
     } catch (e) {
       console.error('fetchData error', e)
     } finally {
@@ -91,6 +131,11 @@ export default function DashboardScreen() {
   useEffect(() => {
     void fetchData()
   }, [fetchData])
+
+  // Refetch when a generation completes so the new deck appears immediately
+  useEffect(() => {
+    if (completedAt > 0) void fetchData()
+  }, [completedAt])
 
   const onRefresh = () => {
     setRefreshing(true)
@@ -236,7 +281,9 @@ export default function DashboardScreen() {
           style={[styles.actionBtn, styles.actionBtnSecondary]}
           onPress={() => navigation.navigate('QuizSetup', { deckId: item.id, deckTitle: item.title })}
         >
-          <Text style={styles.actionBtnTextSecondary}>Quiz</Text>
+          <Text style={deckQuizMap[item.id] ? styles.actionBtnTextQuizExists : styles.actionBtnTextSecondary}>
+            {deckQuizMap[item.id] ? 'View Quiz' : 'Quiz'}
+          </Text>
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
@@ -399,6 +446,20 @@ export default function DashboardScreen() {
                   <ActivityIndicator color="#ed674a" size="large" style={{ marginBottom: 16 }} />
                   <Text style={genModalStyles.title}>{active.title}</Text>
                   <Text style={genModalStyles.step}>{active.step}</Text>
+                  <Text style={genModalStyles.elapsed}>{elapsedSec}s</Text>
+                  <View style={genModalStyles.progressTrack}>
+                    <Animated.View
+                      style={[
+                        genModalStyles.progressFill,
+                        {
+                          width: genProgressAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: ['0%', '100%'],
+                          }),
+                        },
+                      ]}
+                    />
+                  </View>
                 </>
               )}
 
@@ -406,7 +467,7 @@ export default function DashboardScreen() {
                 <>
                   <CheckCircle2 width={40} height={40} color="#4ade80" style={{ alignSelf: 'center', marginBottom: 12 }} />
                   <Text style={[genModalStyles.title, { color: '#4ade80' }]}>Ready!</Text>
-                  <Text style={genModalStyles.step}>{active.title}</Text>
+                  <Text style={genModalStyles.step}>{active.finalTitle || active.title}</Text>
                   {active.resultDeckId && (
                     <TouchableOpacity
                       onPress={() => {
@@ -506,6 +567,7 @@ const styles = StyleSheet.create({
   actionBtnSecondary: { backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.border },
   actionBtnText: { fontSize: 14, fontWeight: '600', color: colors.text },
   actionBtnTextSecondary: { fontSize: 14, fontWeight: '600', color: colors.textMuted },
+  actionBtnTextQuizExists: { fontSize: 14, fontWeight: '600', color: colors.coral },
   emptyState: { alignItems: 'center', paddingTop: 80, gap: 12 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: colors.text },
   emptySubtitle: { fontSize: 15, color: colors.textMuted, textAlign: 'center' },
@@ -624,6 +686,26 @@ const genModalStyles = StyleSheet.create({
     color: '#9ca3af',
     fontSize: 13,
     textAlign: 'center',
+  },
+  elapsed: {
+    color: '#6b7280',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  progressTrack: {
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    marginTop: 12,
+  },
+  progressFill: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#ed674a',
   },
   viewBtn: {
     marginTop: 16,

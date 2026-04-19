@@ -9,14 +9,17 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { Check } from 'lucide-react-native'
 import { generateQuiz } from '../lib/api'
+import { getDocs, query, collection, db, where } from '../lib/firebase'
 import { colors } from '../lib/colors'
 import type { RootStackParamList } from '../navigation/types'
+import type { Card } from '../lib/types'
 import { useGeneration } from '../lib/GenerationContext'
 
 type Nav = NativeStackNavigationProp<RootStackParamList>
@@ -28,14 +31,25 @@ const QUESTION_TYPES = [
   { id: 'free_form', label: 'Free Form' },
 ]
 
+function shuffleArray<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 export default function QuizSetupScreen() {
   const navigation = useNavigation<Nav>()
   const route = useRoute<Route>()
   const { deckId, deckTitle } = route.params ?? {}
 
+  const [quizMode, setQuizMode] = useState<'basic' | 'smart'>('basic')
   const [count, setCount] = useState(10)
   const [selectedTypes, setSelectedTypes] = useState<string[]>(['multiple_choice'])
   const [customText, setCustomText] = useState('')
+  const [loading, setLoading] = useState(false)
   const { startGeneration, updateStep, resolveGeneration, failGeneration } = useGeneration()
 
   const toggleType = (typeId: string) => {
@@ -44,7 +58,30 @@ export default function QuizSetupScreen() {
     )
   }
 
-  const handleGenerate = () => {
+  const handleBasicQuiz = async () => {
+    if (!deckId) {
+      Alert.alert('Error', 'Basic Quiz requires a deck.')
+      return
+    }
+    setLoading(true)
+    try {
+      const snap = await getDocs(query(collection(db, 'cards'), where('deckId', '==', deckId)))
+      const cards: Card[] = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Card))
+      const shuffled = shuffleArray(cards).slice(0, count)
+      navigation.navigate('BasicQuiz', {
+        cards: shuffled.map((c) => ({ id: c.id, front: c.front, back: c.back, order: c.order })),
+        deckTitle: deckTitle ?? 'Quiz',
+        deckId,
+      })
+    } catch (e) {
+      Alert.alert('Error', 'Failed to load cards.')
+      console.error(e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSmartTest = () => {
     if (selectedTypes.length === 0) {
       Alert.alert('Error', 'Select at least one question type.')
       return
@@ -61,7 +98,6 @@ export default function QuizSetupScreen() {
 
     generateQuiz({ deckId, text: customText.trim() || undefined, count, types: selectedTypes })
       .then(result => {
-        // Quiz results go directly to session — resolve with a placeholder id
         resolveGeneration(genId, 'quiz')
         navigation.navigate('QuizSession', {
           questions: result.questions,
@@ -70,7 +106,15 @@ export default function QuizSetupScreen() {
       })
       .catch((e: Error) => failGeneration(genId, e.message || 'Quiz generation failed'))
 
-    navigation.goBack()
+    navigation.navigate('Main')
+  }
+
+  const handleGenerate = () => {
+    if (quizMode === 'basic') {
+      void handleBasicQuiz()
+    } else {
+      handleSmartTest()
+    }
   }
 
   return (
@@ -80,6 +124,29 @@ export default function QuizSetupScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+          {/* Mode toggle */}
+          <Text style={styles.sectionLabel}>Quiz Mode</Text>
+          <View style={styles.modeToggleRow}>
+            <TouchableOpacity
+              style={[styles.modeBtn, quizMode === 'basic' && styles.modeBtnActive]}
+              onPress={() => setQuizMode('basic')}
+            >
+              <Text style={[styles.modeBtnText, quizMode === 'basic' && styles.modeBtnTextActive]}>Basic Quiz</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modeBtn, quizMode === 'smart' && styles.modeBtnActive]}
+              onPress={() => setQuizMode('smart')}
+            >
+              <Text style={[styles.modeBtnText, quizMode === 'smart' && styles.modeBtnTextActive]}>Smart Test</Text>
+            </TouchableOpacity>
+          </View>
+          {quizMode === 'basic' && (
+            <Text style={styles.modeHelper}>Type the answer — checked case & punctuation insensitive</Text>
+          )}
+          {quizMode === 'smart' && (
+            <Text style={styles.modeHelper}>AI generates questions from your deck content</Text>
+          )}
+
           {deckTitle ? (
             <View style={styles.deckInfo}>
               <Text style={styles.deckLabel}>From deck:</Text>
@@ -113,27 +180,41 @@ export default function QuizSetupScreen() {
             ))}
           </View>
 
-          <Text style={styles.sectionLabel}>Question Types</Text>
-          <View style={styles.typeList}>
-            {QUESTION_TYPES.map((t) => {
-              const isSelected = selectedTypes.includes(t.id)
-              return (
-                <TouchableOpacity
-                  key={t.id}
-                  style={[styles.typeItem, isSelected && styles.typeItemActive]}
-                  onPress={() => toggleType(t.id)}
-                >
-                  <View style={[styles.checkbox, isSelected && styles.checkboxActive]}>
-                    {isSelected ? <Check size={14} color={colors.text} /> : null}
-                  </View>
-                  <Text style={[styles.typeLabel, isSelected && styles.typeLabelActive]}>{t.label}</Text>
-                </TouchableOpacity>
-              )
-            })}
-          </View>
+          {quizMode === 'smart' && (
+            <>
+              <Text style={styles.sectionLabel}>Question Types</Text>
+              <View style={styles.typeList}>
+                {QUESTION_TYPES.map((t) => {
+                  const isSelected = selectedTypes.includes(t.id)
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[styles.typeItem, isSelected && styles.typeItemActive]}
+                      onPress={() => toggleType(t.id)}
+                    >
+                      <View style={[styles.checkbox, isSelected && styles.checkboxActive]}>
+                        {isSelected ? <Check size={14} color={colors.text} /> : null}
+                      </View>
+                      <Text style={[styles.typeLabel, isSelected && styles.typeLabelActive]}>{t.label}</Text>
+                    </TouchableOpacity>
+                  )
+                })}
+              </View>
+            </>
+          )}
 
-          <TouchableOpacity style={styles.generateBtn} onPress={handleGenerate}>
-            <Text style={styles.generateBtnText}>Generate Quiz</Text>
+          <TouchableOpacity
+            style={[styles.generateBtn, loading && styles.generateBtnDisabled]}
+            onPress={handleGenerate}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color={colors.text} />
+            ) : (
+              <Text style={styles.generateBtnText}>
+                {quizMode === 'basic' ? 'Start Basic Quiz' : 'Generate Smart Test'}
+              </Text>
+            )}
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -144,6 +225,20 @@ export default function QuizSetupScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   scroll: { padding: 20, gap: 16, paddingBottom: 40 },
+  modeToggleRow: { flexDirection: 'row', gap: 8 },
+  modeBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  modeBtnActive: { backgroundColor: colors.coral + '22', borderColor: colors.coral },
+  modeBtnText: { fontSize: 14, fontWeight: '600', color: colors.textMuted },
+  modeBtnTextActive: { color: colors.coral },
+  modeHelper: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic' },
   deckInfo: {
     backgroundColor: colors.surface,
     borderRadius: 12,
@@ -210,5 +305,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 8,
   },
+  generateBtnDisabled: { opacity: 0.6 },
   generateBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },
 })

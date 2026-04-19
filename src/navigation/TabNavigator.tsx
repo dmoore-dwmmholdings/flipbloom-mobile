@@ -30,8 +30,11 @@ export default function TabNavigator() {
         tabBarStyle: {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
-          height: 60,
+          height: 72,
+          paddingBottom: 8,
+          paddingHorizontal: 16,
         },
+        tabBarItemStyle: { paddingHorizontal: 4 },
         tabBarActiveTintColor: colors.coral,
         tabBarInactiveTintColor: colors.textMuted,
         tabBarLabelStyle: { fontSize: 11, marginBottom: 4 },

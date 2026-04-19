@@ -37,7 +37,7 @@ export default function DeckScreen() {
         getDoc(doc(db, 'decks', deckId)),
         getDocs(query(collection(db, 'cards'), where('deckId', '==', deckId))),
         getDocs(query(collection(db, 'studySessions'), where('deckId', '==', deckId))),
-        getDocs(query(collection(db, 'quizzes'), where('deckId', '==', deckId))),
+        getDocs(query(collection(db, 'savedQuizzes'), where('deckId', '==', deckId))),
       ])
       if (deckDoc.exists()) {
         setDeck({ id: deckDoc.id, ...deckDoc.data() } as Deck)

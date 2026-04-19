@@ -25,6 +25,18 @@ export type RootStackParamList = {
   StudySessionDetail: { sessionId: string }
   Pricing: undefined
   StudyGuideView: { guideId: string }
+  BasicQuiz: {
+    cards: { id: string; front: string; back: string; order: number }[]
+    deckTitle: string
+    deckId?: string
+  }
+  BasicQuizResults: {
+    results: { front: string; back: string; userAnswer: string; correct: boolean }[]
+    deckTitle: string
+    deckId?: string
+    score: number
+    total: number
+  }
 }
 
 export type TabParamList = {

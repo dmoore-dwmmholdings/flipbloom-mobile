@@ -19,7 +19,8 @@ import { useFocusEffect } from '@react-navigation/native'
 import { useNavigation } from '@react-navigation/native'
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { auth, getDocs, query, where, collection, db } from '../lib/firebase'
-import { cancelSubscription, syncPlan, createCheckout, purchaseCredits, submitFeedback } from '../lib/api'
+import { cancelSubscription, createCheckout, purchaseCredits, submitFeedback } from '../lib/api'
+import { APP_VERSION } from '../lib/version'
 import { useAuth } from '../lib/AuthContext'
 import { colors } from '../lib/colors'
 import PlanBadge from '../components/PlanBadge'
@@ -94,20 +95,6 @@ export default function AccountScreen() {
         },
       ]
     )
-  }
-
-  const handleSyncPlan = async () => {
-    setLoading(true)
-    try {
-      await syncPlan()
-      await refreshProfile()
-      Alert.alert('Synced', 'Your plan has been updated.')
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      Alert.alert('Error', message)
-    } finally {
-      setLoading(false)
-    }
   }
 
   const handleBuyCredits = async (quantity: number) => {
@@ -229,17 +216,6 @@ export default function AccountScreen() {
 
         {/* Actions */}
         <View style={styles.card}>
-          <TouchableOpacity
-            style={[styles.syncBtn, loading && styles.btnDisabled]}
-            onPress={() => void handleSyncPlan()}
-            disabled={loading}
-          >
-            {loading
-              ? <ActivityIndicator size="small" color={colors.coral} />
-              : <Text style={styles.syncBtnText}>Sync Plan from Stripe</Text>
-            }
-          </TouchableOpacity>
-
           <TouchableOpacity style={styles.feedbackBtn} onPress={() => setFeedbackVisible(true)}>
             <Text style={styles.feedbackBtnText}>Send Feedback</Text>
           </TouchableOpacity>
@@ -248,6 +224,8 @@ export default function AccountScreen() {
             <Text style={styles.signOutBtnText}>Sign Out</Text>
           </TouchableOpacity>
         </View>
+
+        <Text style={styles.versionText}>Flipbloom v{APP_VERSION}</Text>
       </ScrollView>
 
       {/* Feedback modal */}
@@ -377,15 +355,6 @@ const styles = StyleSheet.create({
   },
   dangerBtnText: { fontSize: 15, fontWeight: '700', color: colors.danger },
   btnDisabled: { opacity: 0.5 },
-  syncBtn: {
-    height: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.coral,
-  },
-  syncBtnText: { fontSize: 15, fontWeight: '600', color: colors.coral },
   feedbackBtn: {
     backgroundColor: colors.surface,
     borderRadius: 12,
@@ -401,11 +370,11 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 16 },
   fieldLabel: { fontSize: 12, fontWeight: '600', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 },
   typeRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
-  typeBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: colors.background, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  typeBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: colors.bg, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
   typeBtnActive: { backgroundColor: 'rgba(237,103,74,0.2)', borderColor: colors.coral },
   typeBtnText: { fontSize: 13, color: colors.textMuted, fontWeight: '500' },
   typeBtnTextActive: { color: colors.coral, fontWeight: '600' },
-  feedbackInput: { backgroundColor: colors.background, borderRadius: 12, padding: 12, color: colors.text, fontSize: 14, minHeight: 100, textAlignVertical: 'top', marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  feedbackInput: { backgroundColor: colors.bg, borderRadius: 12, padding: 12, color: colors.text, fontSize: 14, minHeight: 100, textAlignVertical: 'top', marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
   modalActions: { flexDirection: 'row', gap: 12, justifyContent: 'flex-end' },
   modalCancel: { paddingHorizontal: 16, paddingVertical: 10 },
   modalCancelText: { color: colors.textMuted, fontSize: 14 },
@@ -420,4 +389,5 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   signOutBtnText: { fontSize: 15, fontWeight: '600', color: colors.textMuted },
+  versionText: { fontSize: 12, color: colors.textMuted, textAlign: 'center', marginTop: 24 },
 })

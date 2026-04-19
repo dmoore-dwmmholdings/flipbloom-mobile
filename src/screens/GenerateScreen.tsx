@@ -86,7 +86,9 @@ export default function GenerateScreen() {
 
   const [tab, setTab] = useState<'text' | 'file'>('text')
   const [text, setText] = useState('')
-  const [count, setCount] = useState(10)
+  const [autoCount, setAutoCount] = useState(true)
+  const [count, setCount] = useState(20)
+  const [manualCount, setManualCount] = useState('')
   const [title, setTitle] = useState('')
   const [answerMode, setAnswerMode] = useState<'brief' | 'detailed'>('brief')
   const [selectedFile, setSelectedFile] = useState<{ name: string; uri: string; mimeType: string } | null>(null)
@@ -139,7 +141,8 @@ export default function GenerateScreen() {
 
     const genId = String(Date.now())
     const titleHint = title.trim() || (tab === 'file' ? selectedFile?.name?.replace(/\.[^.]+$/, '') || '' : '')
-    startGeneration(genId, titleHint || 'Generating deck…')
+    const genericTitle = tab === 'file' ? 'Processing your file…' : 'Generating…'
+    startGeneration(genId, genericTitle)
     updateStep(genId, tab === 'file' ? 'Reading file…' : 'Analyzing text…')
 
     // Capture for closure
@@ -159,10 +162,11 @@ export default function GenerateScreen() {
       updateStep(genId, 'Sending to AI…')
 
       // Start API call without awaiting
+      const effectiveCount = autoCount ? 0 : count
       const apiPromise = tab === 'text'
         ? generateFlashcards({
             text: text.trim(),
-            count,
+            count: effectiveCount,
             title: titleHint || undefined,
             existingTitles: currentExistingTitles,
             existingTopics: currentExistingTopics,
@@ -170,7 +174,7 @@ export default function GenerateScreen() {
           })
         : generateFromFile({
             files: filePayloads,
-            count,
+            count: effectiveCount,
             title: titleHint || undefined,
             existingTitles: currentExistingTitles,
             existingTopics: currentExistingTopics,
@@ -187,7 +191,7 @@ export default function GenerateScreen() {
             result.suggestedTopicName ?? null,
             currentExistingTopics
           )
-          resolveGeneration(genId, deckId)
+          resolveGeneration(genId, deckId, finalTitle)
         })
         .catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err)
@@ -195,7 +199,7 @@ export default function GenerateScreen() {
         })
 
       // Navigate immediately to Library tab
-      navigation.navigate('Main' as keyof RootStackParamList)
+      navigation.navigate('Main')
     } catch (err: unknown) {
       // Error before API call (e.g. file read error)
       const message = err instanceof Error ? err.message : String(err)
@@ -268,18 +272,50 @@ export default function GenerateScreen() {
           )}
 
           <View style={styles.countRow}>
-            <Text style={styles.countLabel}>Cards: {count}</Text>
-            <View style={styles.countButtons}>
-              {[5, 10, 15, 20, 30, 50].map((n) => (
-                <TouchableOpacity
-                  key={n}
-                  style={[styles.countBtn, count === n && styles.countBtnActive]}
-                  onPress={() => setCount(n)}
-                >
-                  <Text style={[styles.countBtnText, count === n && styles.countBtnTextActive]}>{n}</Text>
-                </TouchableOpacity>
-              ))}
+            <Text style={styles.countLabel}>Cards</Text>
+            <View style={styles.countToggleRow}>
+              <TouchableOpacity
+                style={[styles.countToggleBtn, autoCount && styles.countToggleBtnActive]}
+                onPress={() => setAutoCount(true)}
+              >
+                <Text style={[styles.countToggleBtnText, autoCount && styles.countToggleBtnTextActive]}>Auto</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.countToggleBtn, !autoCount && styles.countToggleBtnActive]}
+                onPress={() => setAutoCount(false)}
+              >
+                <Text style={[styles.countToggleBtnText, !autoCount && styles.countToggleBtnTextActive]}>Set count</Text>
+              </TouchableOpacity>
             </View>
+            {autoCount ? (
+              <Text style={styles.autoCountHelper}>AI decides based on your content</Text>
+            ) : (
+              <>
+                <View style={styles.countButtons}>
+                  {[10, 20, 30, 50, 100, 200].map((n) => (
+                    <TouchableOpacity
+                      key={n}
+                      style={[styles.countBtn, count === n && !manualCount && styles.countBtnActive]}
+                      onPress={() => { setCount(n); setManualCount('') }}
+                    >
+                      <Text style={[styles.countBtnText, count === n && !manualCount && styles.countBtnTextActive]}>{n}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TextInput
+                  style={styles.manualCountInput}
+                  placeholder="Or enter 1–500"
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="number-pad"
+                  value={manualCount}
+                  onChangeText={(v) => {
+                    const num = parseInt(v, 10)
+                    setManualCount(v)
+                    if (!isNaN(num) && num >= 1 && num <= 500) setCount(num)
+                  }}
+                />
+              </>
+            )}
           </View>
 
           {/* Answer style */}
@@ -375,6 +411,29 @@ const styles = StyleSheet.create({
   fileChange: { fontSize: 12, color: colors.textMuted },
   countRow: { gap: 10 },
   countLabel: { fontSize: 15, fontWeight: '600', color: colors.text },
+  countToggleRow: { flexDirection: 'row', gap: 8 },
+  countToggleBtn: {
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  countToggleBtnActive: { backgroundColor: colors.coral + '22', borderColor: colors.coral },
+  countToggleBtnText: { fontSize: 14, color: colors.textMuted, fontWeight: '600' },
+  countToggleBtnTextActive: { color: colors.coral },
+  autoCountHelper: { fontSize: 13, color: colors.textMuted, fontStyle: 'italic' },
+  manualCountInput: {
+    height: 44,
+    backgroundColor: colors.surface,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    fontSize: 15,
+    color: colors.text,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   countButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   countBtn: {
     paddingHorizontal: 16,

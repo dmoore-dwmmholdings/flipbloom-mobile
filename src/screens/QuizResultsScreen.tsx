@@ -27,7 +27,7 @@ export default function QuizResultsScreen() {
   const [feedback, setFeedback] = useState<string | null>(null)
   const [loadingFeedback, setLoadingFeedback] = useState(false)
 
-  const percentage = Math.round((score / total) * 100)
+  const percentage = Math.round(((score || 0) / (total || 1)) * 100)
 
   const handleGetFeedback = async () => {
     setLoadingFeedback(true)
@@ -68,6 +68,7 @@ export default function QuizResultsScreen() {
       <FlatList
         data={answers}
         keyExtractor={(item, idx) => `${item.questionId}-${idx}`}
+        renderItem={renderAnswer}
         contentContainerStyle={styles.scroll}
         ListHeaderComponent={
           <>

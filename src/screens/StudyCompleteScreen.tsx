@@ -89,7 +89,7 @@ export default function StudyCompleteScreen() {
     ]).start()
   }, [])
 
-  const mastery = Math.round((knownCount / totalCards) * 100)
+  const mastery = Math.round((knownCount / (totalCards || 1)) * 100)
   const particles = Array.from({ length: 40 }, (_, i) => ({
     id: i,
     delay: i * 60,
