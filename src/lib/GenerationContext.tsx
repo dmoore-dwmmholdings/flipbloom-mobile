@@ -8,6 +8,7 @@ export interface ActiveGeneration {
   startedAt: number
   error?: string
   resultDeckId?: string
+  resultCardCount?: number
   finalTitle?: string
 }
 
@@ -16,7 +17,7 @@ interface GenerationContextValue {
   completedAt: number
   startGeneration: (id: string, title: string) => void
   updateStep: (id: string, step: string) => void
-  resolveGeneration: (id: string, deckId: string, finalTitle?: string) => void
+  resolveGeneration: (id: string, deckId: string, finalTitle?: string, cardCount?: number) => void
   failGeneration: (id: string, error: string) => void
   dismissGeneration: () => void
 }
@@ -41,10 +42,10 @@ export function GenerationProvider({ children }: { children: React.ReactNode }) 
     setActive(prev => prev?.id === id ? { ...prev, step } : prev)
   }, [])
 
-  const resolveGeneration = useCallback((id: string, deckId: string, finalTitle?: string) => {
+  const resolveGeneration = useCallback((id: string, deckId: string, finalTitle?: string, cardCount?: number) => {
     setActive(prev =>
       prev?.id === id
-        ? { ...prev, status: 'done', resultDeckId: deckId, finalTitle }
+        ? { ...prev, status: 'done', resultDeckId: deckId, finalTitle, resultCardCount: cardCount }
         : prev
     )
     setCompletedAt(Date.now())

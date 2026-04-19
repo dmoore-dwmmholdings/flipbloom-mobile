@@ -143,7 +143,8 @@ export default function GenerateScreen() {
     const titleHint = title.trim() || (tab === 'file' ? selectedFile?.name?.replace(/\.[^.]+$/, '') || '' : '')
     const genericTitle = tab === 'file' ? 'Processing your file…' : 'Generating…'
     startGeneration(genId, genericTitle)
-    updateStep(genId, tab === 'file' ? 'Reading file…' : 'Analyzing text…')
+    const countHint = autoCount ? 'AI deciding card count…' : `Generating ${count} cards…`
+    updateStep(genId, tab === 'file' ? 'Reading file…' : countHint)
 
     // Capture for closure
     const currentUser = user
@@ -159,7 +160,7 @@ export default function GenerateScreen() {
         filePayloads = [{ fileData: base64, mimeType: selectedFile.mimeType, name: selectedFile.name }]
       }
 
-      updateStep(genId, 'Sending to AI…')
+      updateStep(genId, autoCount ? 'Generating with AI…' : `Generating ${count} cards…`)
 
       // Start API call without awaiting
       const effectiveCount = autoCount ? 0 : count
@@ -191,7 +192,7 @@ export default function GenerateScreen() {
             result.suggestedTopicName ?? null,
             currentExistingTopics
           )
-          resolveGeneration(genId, deckId, finalTitle)
+          resolveGeneration(genId, deckId, finalTitle, result.cards.length)
         })
         .catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err)

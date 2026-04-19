@@ -468,6 +468,9 @@ export default function DashboardScreen() {
                   <CheckCircle2 width={40} height={40} color="#4ade80" style={{ alignSelf: 'center', marginBottom: 12 }} />
                   <Text style={[genModalStyles.title, { color: '#4ade80' }]}>Ready!</Text>
                   <Text style={[genModalStyles.title, { color: colors.text, marginTop: 4 }]}>{active.finalTitle || active.title}</Text>
+                  {active.resultCardCount != null && (
+                    <Text style={genModalStyles.step}>{active.resultCardCount} cards generated</Text>
+                  )}
                   {active.resultDeckId && (
                     <TouchableOpacity
                       onPress={() => {
