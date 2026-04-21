@@ -15,12 +15,10 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { Check } from 'lucide-react-native'
-import { generateQuiz } from '../lib/api'
 import { getDocs, query, collection, db, where } from '../lib/firebase'
 import { colors } from '../lib/colors'
 import type { RootStackParamList } from '../navigation/types'
 import type { Card } from '../lib/types'
-import { useGeneration } from '../lib/GenerationContext'
 
 type Nav = NativeStackNavigationProp<RootStackParamList>
 type Route = RouteProp<RootStackParamList, 'QuizSetup'>
@@ -50,7 +48,6 @@ export default function QuizSetupScreen() {
   const [selectedTypes, setSelectedTypes] = useState<string[]>(['multiple_choice'])
   const [customText, setCustomText] = useState('')
   const [loading, setLoading] = useState(false)
-  const { startGeneration, updateStep, resolveGeneration, failGeneration } = useGeneration()
 
   const toggleType = (typeId: string) => {
     setSelectedTypes((prev) =>
@@ -91,22 +88,16 @@ export default function QuizSetupScreen() {
       return
     }
 
-    const genId = String(Date.now())
-    const title = deckTitle ? `Quiz: ${deckTitle}` : 'Generating quiz…'
-    startGeneration(genId, title)
-    updateStep(genId, 'Generating with AI…')
-
-    generateQuiz({ deckId, text: customText.trim() || undefined, count, types: selectedTypes })
-      .then(result => {
-        resolveGeneration(genId, 'quiz')
-        navigation.navigate('QuizSession', {
-          questions: result.questions,
-          quizTitle: deckTitle ?? result.deckTitle ?? 'Quiz',
-        })
-      })
-      .catch((e: Error) => failGeneration(genId, e.message || 'Quiz generation failed'))
-
-    navigation.navigate('Main')
+    navigation.navigate('QuizSession', {
+      quizTitle: deckTitle || 'Quiz',
+      streamingParams: {
+        deckId,
+        text: customText.trim() || undefined,
+        count,
+        types: selectedTypes,
+        deckTitle: deckTitle || 'Quiz',
+      },
+    })
   }
 
   const handleGenerate = () => {

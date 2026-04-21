@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View,
   Text,
@@ -13,9 +13,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
-import { saveQuizSession, judgeAnswer } from '../lib/api'
+import { saveQuizSession, judgeAnswer, streamQuiz } from '../lib/api'
 import { colors } from '../lib/colors'
-import type { QuizAnswer } from '../lib/types'
+import type { QuizAnswer, QuizQuestion } from '../lib/types'
 import type { RootStackParamList } from '../navigation/types'
 
 type Nav = NativeStackNavigationProp<RootStackParamList>
@@ -24,8 +24,16 @@ type Route = RouteProp<RootStackParamList, 'QuizSession'>
 export default function QuizSessionScreen() {
   const navigation = useNavigation<Nav>()
   const route = useRoute<Route>()
-  const { questions, quizId, quizTitle } = route.params
+  const { questions: initialQuestions, quizId, quizTitle, streamingParams } = route.params
 
+  // Streaming state
+  const [streamQuestions, setStreamQuestions] = useState<QuizQuestion[]>(initialQuestions ?? [])
+  const [streamStatus, setStreamStatus] = useState<'loading' | 'active' | 'done' | 'error'>(
+    initialQuestions && initialQuestions.length > 0 ? 'done' : streamingParams ? 'loading' : 'done'
+  )
+  const [streamStep, setStreamStep] = useState('Preparing…')
+
+  // Quiz state
   const [currentIndex, setCurrentIndex] = useState(0)
   const [answers, setAnswers] = useState<QuizAnswer[]>([])
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
@@ -34,8 +42,157 @@ export default function QuizSessionScreen() {
   const [saving, setSaving] = useState(false)
   const [judging, setJudging] = useState(false)
 
-  const question = questions[currentIndex]
-  const progress = currentIndex / questions.length
+  // Guard against double-save
+  const savedRef = useRef(false)
+  // Keep latest answers in ref for effects
+  const answersRef = useRef<QuizAnswer[]>([])
+  useEffect(() => { answersRef.current = answers }, [answers])
+
+  // Start streaming if streamingParams provided
+  useEffect(() => {
+    if (!streamingParams) return
+    let cancelled = false
+
+    streamQuiz(
+      streamingParams,
+      (q) => {
+        if (cancelled) return
+        setStreamQuestions((prev) => {
+          const next = [...prev, q]
+          if (next.length === 1) setStreamStatus('active')
+          return next
+        })
+      },
+      (stepText) => {
+        if (cancelled) return
+        setStreamStep(stepText)
+      }
+    )
+      .then(() => {
+        if (!cancelled) setStreamStatus('done')
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setStreamStatus('error')
+          setStreamStep((err as { message?: string }).message || 'Generation failed')
+        }
+      })
+
+    return () => { cancelled = true }
+  }, [])
+
+  const saveAndNavigate = useCallback(async (finalAnswers: QuizAnswer[]) => {
+    if (savedRef.current) return
+    savedRef.current = true
+    setSaving(true)
+    try {
+      const score = finalAnswers.filter((a) => a.correct).length
+      const result = await saveQuizSession({
+        quizId: quizId ?? 'adhoc',
+        quizTitle,
+        score,
+        totalQuestions: finalAnswers.length,
+        answers: finalAnswers,
+      })
+      navigation.replace('QuizResults', {
+        sessionId: result.id,
+        quizId: quizId ?? 'adhoc',
+        quizTitle,
+        score,
+        total: finalAnswers.length,
+        answers: finalAnswers,
+      })
+    } catch (e) {
+      console.error(e)
+      const score = finalAnswers.filter((a) => a.correct).length
+      navigation.replace('QuizResults', {
+        sessionId: 'local',
+        quizId: quizId ?? 'adhoc',
+        quizTitle,
+        score,
+        total: finalAnswers.length,
+        answers: finalAnswers,
+      })
+    } finally {
+      setSaving(false)
+    }
+  }, [navigation, quizId, quizTitle])
+
+  // When streaming finishes, check if user already answered all questions
+  useEffect(() => {
+    if (streamStatus !== 'done') return
+    if (streamQuestions.length === 0) return
+    if (answersRef.current.length >= streamQuestions.length) {
+      void saveAndNavigate(answersRef.current)
+    }
+  }, [streamStatus, streamQuestions.length, saveAndNavigate])
+
+  // Loading skeleton while streaming hasn't delivered first question yet
+  if (streamStatus === 'loading') {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 }}>
+          <ActivityIndicator color={colors.coral} size="large" />
+          <Text style={{ color: colors.textMuted, fontSize: 15 }}>{streamStep}</Text>
+          <View style={{ width: '100%', backgroundColor: colors.surface, borderRadius: 12, padding: 20, gap: 12 }}>
+            <View style={{ height: 16, backgroundColor: colors.border, borderRadius: 6, width: '85%' }} />
+            <View style={{ height: 16, backgroundColor: colors.border, borderRadius: 6, width: '65%' }} />
+          </View>
+          {[0, 1, 2, 3].map((i) => (
+            <View
+              key={i}
+              style={{ width: '100%', height: 52, backgroundColor: colors.surface, borderRadius: 10, borderWidth: 1, borderColor: colors.border }}
+            />
+          ))}
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  // Error state
+  if (streamStatus === 'error') {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12, padding: 24 }}>
+          <Text style={{ color: '#f87171', fontSize: 18, fontWeight: '700' }}>Quiz generation failed</Text>
+          <Text style={{ color: colors.textMuted, textAlign: 'center' }}>{streamStep}</Text>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={{ marginTop: 12, padding: 14, backgroundColor: colors.surface, borderRadius: 10, borderWidth: 1, borderColor: colors.border }}
+          >
+            <Text style={{ color: colors.coral, fontWeight: '600' }}>Back to Quiz Setup</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  // Waiting for next streamed question
+  if (currentIndex >= streamQuestions.length && streamStatus !== 'done') {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 }}>
+          <ActivityIndicator color={colors.coral} />
+          <Text style={{ color: colors.textMuted }}>Loading next question…</Text>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  const question = streamQuestions[currentIndex]
+  // Shouldn't happen, but guard for safety
+  if (!question) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator color={colors.coral} />
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  const totalCount = streamStatus === 'done' ? streamQuestions.length : undefined
+  const progress = totalCount ? currentIndex / totalCount : 0
 
   const handleSelectOption = (option: string) => {
     if (submitted) return
@@ -51,7 +208,6 @@ export default function QuizSessionScreen() {
     if (question.type === 'multiple_choice') {
       isCorrect = answer.trim().toLowerCase() === question.correct.toLowerCase()
     } else {
-      // Short answer — use judgeAnswer API
       setJudging(true)
       try {
         const result = await judgeAnswer({
@@ -62,7 +218,6 @@ export default function QuizSessionScreen() {
         isCorrect = result.result
         feedback = result.feedback
       } catch {
-        // Fall back to string comparison on error
         isCorrect = answer.trim().toLowerCase() === question.correct.toLowerCase()
       } finally {
         setJudging(false)
@@ -79,52 +234,22 @@ export default function QuizSessionScreen() {
     setAnswers(newAnswers)
     setSubmitted(true)
 
-    if (currentIndex === questions.length - 1) {
-      // Last question — save and navigate
-      setSaving(true)
-      try {
-        const score = newAnswers.filter((a) => a.correct).length
-        const result = await saveQuizSession({
-          quizId: quizId ?? 'adhoc',
-          quizTitle,
-          score,
-          totalQuestions: questions.length,
-          answers: newAnswers,
-        })
-        navigation.replace('QuizResults', {
-          sessionId: result.id,
-          quizId: quizId ?? 'adhoc',
-          quizTitle,
-          score,
-          total: questions.length,
-          answers: newAnswers,
-        })
-      } catch (e) {
-        console.error(e)
-        // Navigate even if save fails
-        const score = newAnswers.filter((a) => a.correct).length
-        navigation.replace('QuizResults', {
-          sessionId: 'local',
-          quizId: quizId ?? 'adhoc',
-          quizTitle,
-          score,
-          total: questions.length,
-          answers: newAnswers,
-        })
-      } finally {
-        setSaving(false)
-      }
+    const isLastQuestion = currentIndex === streamQuestions.length - 1
+    if (isLastQuestion && streamStatus === 'done') {
+      void saveAndNavigate(newAnswers)
     }
   }
 
   const handleNext = () => {
-    setCurrentIndex(currentIndex + 1)
+    setCurrentIndex((i) => i + 1)
     setSelectedOption(null)
     setFreeFormText('')
     setSubmitted(false)
   }
 
   const currentAnswer = answers[currentIndex]
+  const isLastSubmitted = currentIndex === streamQuestions.length - 1 && submitted
+  const moreQuestionsComingAfterLast = isLastSubmitted && streamStatus !== 'done'
 
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
@@ -137,7 +262,9 @@ export default function QuizSessionScreen() {
         </View>
 
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <Text style={styles.counter}>{currentIndex + 1} / {questions.length}</Text>
+          <Text style={styles.counter}>
+            {currentIndex + 1} / {totalCount ?? '?'}
+          </Text>
           <Text style={styles.questionType}>{question.type.replace('_', ' ').toUpperCase()}</Text>
           <Text style={styles.questionText}>{question.question}</Text>
 
@@ -262,13 +389,22 @@ export default function QuizSessionScreen() {
             </View>
           ) : null}
 
-          {submitted && currentIndex < questions.length - 1 && (
+          {/* Show "Next Question" only if there are more questions (or more might stream in) */}
+          {submitted && !moreQuestionsComingAfterLast && currentIndex < streamQuestions.length - 1 && (
             <TouchableOpacity style={styles.nextBtn} onPress={handleNext}>
               <Text style={styles.nextBtnText}>Next Question</Text>
             </TouchableOpacity>
           )}
 
-          {submitted && currentIndex === questions.length - 1 && saving && (
+          {/* Waiting for next question via stream */}
+          {moreQuestionsComingAfterLast && (
+            <View style={styles.waitingRow}>
+              <ActivityIndicator size="small" color={colors.coral} />
+              <Text style={styles.waitingText}>Loading next question…</Text>
+            </View>
+          )}
+
+          {submitted && currentIndex === streamQuestions.length - 1 && streamStatus === 'done' && saving && (
             <Text style={styles.savingText}>Saving results...</Text>
           )}
         </ScrollView>
@@ -358,5 +494,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   nextBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },
+  waitingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 16,
+  },
+  waitingText: { fontSize: 14, color: colors.textMuted },
   savingText: { textAlign: 'center', color: colors.textMuted, fontSize: 14 },
 })

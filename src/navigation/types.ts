@@ -6,7 +6,19 @@ export type RootStackParamList = {
   Deck: { deckId: string }
   Study: { deckId: string; deckTitle: string }
   QuizSetup: { deckId?: string; deckTitle?: string }
-  QuizSession: { questions: QuizQuestion[]; quizId?: string; quizTitle: string }
+  QuizSession: {
+    questions?: QuizQuestion[]
+    quizId?: string
+    quizTitle: string
+    streamingParams?: {
+      deckId?: string
+      topicId?: string
+      text?: string
+      count: number
+      types: string[]
+      deckTitle?: string
+    }
+  }
   QuizResults: {
     sessionId: string
     quizId: string

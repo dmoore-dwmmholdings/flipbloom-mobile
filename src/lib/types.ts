@@ -16,6 +16,7 @@ export interface UserProfile {
   stripeCustomerId?: string
   stripeSubscriptionId?: string
   createdAt?: unknown
+  telemetryConsent?: boolean
 }
 
 export interface Deck {

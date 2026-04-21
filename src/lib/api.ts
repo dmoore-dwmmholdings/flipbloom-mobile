@@ -158,3 +158,116 @@ export const submitFeedback = (data: {
   type: string
   message: string
 }) => callApi<{ ok: boolean; id: string }>('submitFeedback', data as unknown as Record<string, unknown>)
+
+export async function streamFlashcards(
+  data: {
+    text: string
+    count: number
+    title?: string
+    existingTitles?: string[]
+    existingTopics?: string[]
+    answerMode?: 'brief' | 'detailed'
+    saveMaterial?: boolean
+  },
+  onProgress: (cardCount: number, targetCount: number, stepText: string) => void
+): Promise<{
+  cards: { front: string; back: string }[]
+  suggestedTitle: string | null
+  suggestedTopicName?: string | null
+}> {
+  const user = auth.currentUser
+  if (!user) throw new Error('Not authenticated')
+  const token = await user.getIdToken()
+
+  const res = await fetch(`${BASE}/api/streamFlashcards`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify(data),
+  })
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '')
+    throw Object.assign(new Error(text || `Request failed: ${res.status}`), { status: res.status })
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+
+    for (const raw of events) {
+      if (!raw.startsWith('data: ')) continue
+      let event: Record<string, unknown>
+      try { event = JSON.parse(raw.slice(6)) } catch { continue }
+
+      if (event.type === 'step') onProgress(0, 0, event.text as string)
+      if (event.type === 'progress') {
+        const n = event.cardCount as number
+        const t = event.targetCount as number
+        onProgress(n, t, t > 0 ? `${n} of ${t} cards…` : `${n} cards…`)
+      }
+      if (event.type === 'error') throw new Error((event.message as string) || 'Generation failed')
+      if (event.type === 'done') return event as unknown as { cards: { front: string; back: string }[]; suggestedTitle: string | null; suggestedTopicName?: string | null }
+    }
+  }
+  throw new Error('Stream ended without result')
+}
+
+export async function streamQuiz(
+  data: {
+    deckId?: string
+    topicId?: string
+    text?: string
+    fileData?: string
+    mimeType?: string
+    count: number
+    types: string[]
+  },
+  onQuestion: (q: QuizQuestion) => void,
+  onStep: (text: string) => void,
+): Promise<{ deckTitle: string; totalCount: number }> {
+  const user = auth.currentUser
+  if (!user) throw new Error('Not authenticated')
+  const token = await user.getIdToken()
+
+  const res = await fetch(`${BASE}/api/streamQuiz`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify(data),
+  })
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '')
+    throw Object.assign(new Error(text || `Request failed: ${res.status}`), { status: res.status })
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+
+    for (const raw of events) {
+      if (!raw.startsWith('data: ')) continue
+      let event: Record<string, unknown>
+      try { event = JSON.parse(raw.slice(6)) } catch { continue }
+
+      if (event.type === 'step') onStep(event.text as string)
+      if (event.type === 'question') onQuestion(event.question as QuizQuestion)
+      if (event.type === 'error') throw new Error((event.message as string) || 'Quiz generation failed')
+      if (event.type === 'done') return { deckTitle: event.deckTitle as string, totalCount: event.totalCount as number }
+    }
+  }
+  throw new Error('Stream ended without result')
+}

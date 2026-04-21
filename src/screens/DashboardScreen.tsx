@@ -16,7 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
-import { Plus, X, CheckCircle2, XCircle, Trash2 } from 'lucide-react-native'
+import { Plus, X, CheckCircle2, XCircle, Trash2, RotateCcw } from 'lucide-react-native'
 import {
   getDocs,
   query,
@@ -54,7 +54,7 @@ const TOPIC_COLORS = [
 export default function DashboardScreen() {
   const { user, profile } = useAuth()
   const navigation = useNavigation<Nav>()
-  const { active, completedAt, dismissGeneration } = useGeneration()
+  const { active, completedAt, dismissGeneration, retryGeneration } = useGeneration()
   const [decks, setDecks] = useState<Deck[]>([])
   const [topics, setTopics] = useState<Topic[]>([])
   const [deckQuizMap, setDeckQuizMap] = useState<Record<string, boolean>>({})
@@ -66,6 +66,7 @@ export default function DashboardScreen() {
   const [elapsedSec, setElapsedSec] = useState(0)
   const genProgressAnim = useRef(new Animated.Value(0)).current
 
+  // Animate progress bar when generation starts/ends
   useEffect(() => {
     if (active?.status === 'generating') {
       setElapsedSec(0)
@@ -84,6 +85,20 @@ export default function DashboardScreen() {
     }
   }, [active?.status])
 
+  // Update progress bar with real card count from stream
+  useEffect(() => {
+    if (active?.status !== 'generating') return
+    if (!active.liveCardCount || !active.liveTargetCount) return
+    const pct = Math.min((active.liveCardCount / active.liveTargetCount) * 0.95, 0.95)
+    genProgressAnim.stopAnimation(() => {
+      Animated.timing(genProgressAnim, {
+        toValue: pct,
+        duration: 300,
+        useNativeDriver: false,
+      }).start()
+    })
+  }, [active?.liveCardCount, active?.liveTargetCount])
+
   useEffect(() => {
     if (active?.status !== 'generating') return
     const interval = setInterval(() => {
@@ -97,6 +112,11 @@ export default function DashboardScreen() {
   const [topicModalVisible, setTopicModalVisible] = useState(false)
   const [newTopicName, setNewTopicName] = useState('')
   const [newTopicColor, setNewTopicColor] = useState(TOPIC_COLORS[0])
+
+  // Rename modal state
+  const [renameModalVisible, setRenameModalVisible] = useState(false)
+  const [renamingTopic, setRenamingTopic] = useState<Topic | null>(null)
+  const [renameText, setRenameText] = useState('')
 
   const fetchData = useCallback(async () => {
     if (!user) return
@@ -161,16 +181,11 @@ export default function DashboardScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              // Delete all cards in the deck
               const cardSnap = await getDocs(
                 query(collection(db, 'cards'), where('deckId', '==', deckId))
               )
               await Promise.all(cardSnap.docs.map((c) => deleteDoc(doc(db, 'cards', c.id))))
-
-              // Delete the deck itself
               await deleteDoc(doc(db, 'decks', deckId))
-
-              // Decrement deckCount on user doc
               if (user) {
                 try {
                   await updateDoc(doc(db, 'users', user.uid), { deckCount: increment(-1) })
@@ -178,8 +193,6 @@ export default function DashboardScreen() {
                   // silent
                 }
               }
-
-              // Remove from local state
               setDecks((prev) => prev.filter((d) => d.id !== deckId))
             } catch (e) {
               console.error('Delete deck error', e)
@@ -214,10 +227,10 @@ export default function DashboardScreen() {
     }
   }
 
-  const handleDeleteTopic = (topicId: string) => {
+  const handleDeleteTopic = (topic: Topic) => {
     Alert.alert(
-      'Delete topic?',
-      "Decks in this topic won't be deleted.",
+      'Delete Topic',
+      `Delete "${topic.name}"? Decks in this topic won't be deleted.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -225,9 +238,19 @@ export default function DashboardScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteDoc(doc(db, 'topics', topicId))
-              setTopics((prev) => prev.filter((t) => t.id !== topicId))
-              if (selectedTopic === topicId) setSelectedTopic(null)
+              await deleteDoc(doc(db, 'topics', topic.id))
+              // Unassign decks from this topic
+              const affected = decks.filter((d) => d.topicId === topic.id)
+              await Promise.all(
+                affected.map((d) => updateDoc(doc(db, 'decks', d.id), { topicId: null, topicName: null }))
+              )
+              setTopics((prev) => prev.filter((t) => t.id !== topic.id))
+              setDecks((prev) =>
+                prev.map((d) =>
+                  d.topicId === topic.id ? { ...d, topicId: undefined, topicName: undefined } : d
+                )
+              )
+              if (selectedTopic === topic.id) setSelectedTopic(null)
             } catch (e) {
               console.error('Delete topic error', e)
             }
@@ -235,6 +258,39 @@ export default function DashboardScreen() {
         },
       ]
     )
+  }
+
+  const handleRenameTopic = (topic: Topic) => {
+    setRenamingTopic(topic)
+    setRenameText(topic.name)
+    setRenameModalVisible(true)
+  }
+
+  const doRenameTopic = async () => {
+    if (!renamingTopic || !renameText.trim()) return
+    const newName = renameText.trim()
+    try {
+      await updateDoc(doc(db, 'topics', renamingTopic.id), { name: newName })
+      // Update deck documents in Firestore
+      const affectedDecks = decks.filter((d) => d.topicId === renamingTopic.id)
+      await Promise.all(affectedDecks.map((d) => updateDoc(doc(db, 'decks', d.id), { topicName: newName })))
+      // Update local state
+      setTopics((prev) => prev.map((t) => t.id === renamingTopic.id ? { ...t, name: newName } : t))
+      setDecks((prev) => prev.map((d) => d.topicId === renamingTopic.id ? { ...d, topicName: newName } : d))
+      setRenameModalVisible(false)
+      setRenamingTopic(null)
+      setRenameText('')
+    } catch (e) {
+      console.error('Rename topic error', e)
+    }
+  }
+
+  const handleTopicLongPress = (topic: Topic) => {
+    Alert.alert(topic.name, 'What would you like to do?', [
+      { text: 'Rename', onPress: () => handleRenameTopic(topic) },
+      { text: 'Delete', style: 'destructive', onPress: () => handleDeleteTopic(topic) },
+      { text: 'Cancel', style: 'cancel' },
+    ])
   }
 
   const filteredDecks = selectedTopic
@@ -330,7 +386,7 @@ export default function DashboardScreen() {
                 selectedTopic === t.id ? { borderColor: t.color } : {},
               ]}
               onPress={() => setSelectedTopic(selectedTopic === t.id ? null : t.id)}
-              onLongPress={() => handleDeleteTopic(t.id)}
+              onLongPress={() => handleTopicLongPress(t)}
             >
               <Text
                 style={[
@@ -432,6 +488,51 @@ export default function DashboardScreen() {
         </View>
       </Modal>
 
+      {/* Topic rename modal */}
+      <Modal
+        visible={renameModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRenameModalVisible(false)}
+      >
+        <View style={topicModalStyles.overlay}>
+          <View style={topicModalStyles.card}>
+            <Text style={topicModalStyles.heading}>Rename Topic</Text>
+
+            <TextInput
+              style={topicModalStyles.input}
+              placeholder="Topic name"
+              placeholderTextColor={colors.textMuted}
+              value={renameText}
+              onChangeText={setRenameText}
+              autoFocus
+            />
+
+            <TouchableOpacity
+              style={[
+                topicModalStyles.addBtn,
+                !renameText.trim() && topicModalStyles.addBtnDisabled,
+              ]}
+              onPress={() => { void doRenameTopic() }}
+              disabled={!renameText.trim()}
+            >
+              <Text style={topicModalStyles.addBtnText}>Save</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={topicModalStyles.cancelBtn}
+              onPress={() => {
+                setRenameModalVisible(false)
+                setRenamingTopic(null)
+                setRenameText('')
+              }}
+            >
+              <Text style={topicModalStyles.cancelBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Generation Progress Modal */}
       {active && (
         <Modal transparent animationType="fade" visible>
@@ -446,7 +547,11 @@ export default function DashboardScreen() {
                   <ActivityIndicator color="#ed674a" size="large" style={{ marginBottom: 16 }} />
                   <Text style={genModalStyles.title}>{active.title}</Text>
                   <Text style={genModalStyles.step}>{active.step}</Text>
-                  <Text style={genModalStyles.elapsed}>{elapsedSec}s</Text>
+                  {active.liveCardCount != null && active.liveTargetCount != null && active.liveTargetCount > 0 ? (
+                    <Text style={genModalStyles.elapsed}>{active.liveCardCount} / {active.liveTargetCount} cards</Text>
+                  ) : (
+                    <Text style={genModalStyles.elapsed}>{elapsedSec}s</Text>
+                  )}
                   <View style={genModalStyles.progressTrack}>
                     <Animated.View
                       style={[
@@ -490,6 +595,15 @@ export default function DashboardScreen() {
                   <XCircle width={40} height={40} color="#f87171" style={{ alignSelf: 'center', marginBottom: 12 }} />
                   <Text style={[genModalStyles.title, { color: '#f87171' }]}>Generation failed</Text>
                   <Text style={genModalStyles.step}>{active.error}</Text>
+                  {active.retryFn && (
+                    <TouchableOpacity
+                      onPress={retryGeneration}
+                      style={genModalStyles.retryBtn}
+                    >
+                      <RotateCcw width={14} height={14} color={colors.text} style={{ marginRight: 6 }} />
+                      <Text style={genModalStyles.retryBtnText}>Retry</Text>
+                    </TouchableOpacity>
+                  )}
                 </>
               )}
             </View>
@@ -720,6 +834,22 @@ const genModalStyles = StyleSheet.create({
   viewBtnText: {
     color: 'white',
     fontWeight: '700',
+    fontSize: 14,
+  },
+  retryBtn: {
+    marginTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  retryBtnText: {
+    color: colors.text,
+    fontWeight: '600',
     fontSize: 14,
   },
 })

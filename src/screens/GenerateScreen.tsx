@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View,
   Text,
@@ -8,15 +8,18 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Switch,
+  Modal,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
+import { useFocusEffect } from '@react-navigation/native'
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import * as DocumentPicker from 'expo-document-picker'
 import { File as FSFile } from 'expo-file-system/next'
 import { File, FileText } from 'lucide-react-native'
-import { addDoc, collection, db, serverTimestamp, getDocs, query, where } from '../lib/firebase'
-import { generateFlashcards, generateFromFile } from '../lib/api'
+import { addDoc, collection, db, serverTimestamp, getDocs, query, where, updateDoc, doc } from '../lib/firebase'
+import { streamFlashcards, generateFromFile } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import { useGeneration } from '../lib/GenerationContext'
 import { colors } from '../lib/colors'
@@ -80,9 +83,9 @@ async function saveDeckToFirestore(
 }
 
 export default function GenerateScreen() {
-  const { user } = useAuth()
+  const { user, profile } = useAuth()
   const navigation = useNavigation<Nav>()
-  const { startGeneration, updateStep, resolveGeneration, failGeneration } = useGeneration()
+  const { startGeneration, updateStep, updateCount, resolveGeneration, failGeneration, setRetryFn } = useGeneration()
 
   const [tab, setTab] = useState<'text' | 'file'>('text')
   const [text, setText] = useState('')
@@ -96,6 +99,11 @@ export default function GenerateScreen() {
   const [existingTitles, setExistingTitles] = useState<string[]>([])
   const [existingTopics, setExistingTopics] = useState<string[]>([])
 
+  // Telemetry / save material
+  const [saveMaterial, setSaveMaterial] = useState(false)
+  const [consentModalVisible, setConsentModalVisible] = useState(false)
+  const hasShownConsentRef = useRef(false)
+
   useEffect(() => {
     const fetchExisting = async () => {
       if (!user) return
@@ -108,6 +116,28 @@ export default function GenerateScreen() {
     }
     void fetchExisting()
   }, [user])
+
+  // Show telemetry consent modal on first visit if consent not yet given
+  useFocusEffect(
+    useCallback(() => {
+      if (!profile || hasShownConsentRef.current) return
+      if (profile.telemetryConsent === undefined) {
+        hasShownConsentRef.current = true
+        setConsentModalVisible(true)
+      }
+    }, [profile])
+  )
+
+  const handleTelemetryConsent = async (consent: boolean) => {
+    setConsentModalVisible(false)
+    setSaveMaterial(consent)
+    if (!user) return
+    try {
+      await updateDoc(doc(db, 'users', user.uid), { telemetryConsent: consent })
+    } catch (e) {
+      console.error('telemetry consent save error', e)
+    }
+  }
 
   const pickFile = async () => {
     try {
@@ -127,7 +157,7 @@ export default function GenerateScreen() {
     }
   }
 
-  const handleGenerate = async () => {
+  const handleGenerate = () => {
     setError(null)
 
     if (tab === 'text' && !text.trim()) {
@@ -141,72 +171,91 @@ export default function GenerateScreen() {
 
     const genId = String(Date.now())
     const titleHint = title.trim() || (tab === 'file' ? selectedFile?.name?.replace(/\.[^.]+$/, '') || '' : '')
-    const genericTitle = tab === 'file' ? 'Processing your file…' : 'Generating…'
-    startGeneration(genId, genericTitle)
-    const countHint = autoCount ? 'AI deciding card count…' : `Generating ${count} cards…`
-    updateStep(genId, tab === 'file' ? 'Reading file…' : countHint)
+    startGeneration(genId, titleHint || (tab === 'file' ? 'Processing file…' : 'Generating…'))
+    updateStep(genId, tab === 'file' ? 'Reading file…' : 'Starting…')
 
-    // Capture for closure
-    const currentUser = user
-    const currentExistingTopics = existingTopics
-    const currentExistingTitles = existingTitles
+    // Capture current state for closures
+    const capturedUser = user
+    const capturedText = text.trim()
+    const capturedFile = selectedFile
+    const capturedCount = autoCount ? 0 : count
+    const capturedTitleHint = titleHint
+    const capturedExistingTopics = existingTopics
+    const capturedExistingTitles = existingTitles
+    const capturedAnswerMode = answerMode
+    const capturedSaveMaterial = saveMaterial
+    const capturedTab = tab
 
-    try {
-      let filePayloads: { fileData: string; mimeType: string; name: string }[] = []
+    const doGenerate = async () => {
+      try {
+        let cards: { front: string; back: string }[]
+        let suggestedTitle: string | null
+        let suggestedTopicName: string | null | undefined
 
-      if (tab === 'file' && selectedFile) {
-        const file = new FSFile(selectedFile.uri)
-        const base64 = await file.base64()
-        filePayloads = [{ fileData: base64, mimeType: selectedFile.mimeType, name: selectedFile.name }]
-      }
-
-      updateStep(genId, autoCount ? 'Generating with AI…' : `Generating ${count} cards…`)
-
-      // Start API call without awaiting
-      const effectiveCount = autoCount ? 0 : count
-      const apiPromise = tab === 'text'
-        ? generateFlashcards({
-            text: text.trim(),
-            count: effectiveCount,
-            title: titleHint || undefined,
-            existingTitles: currentExistingTitles,
-            existingTopics: currentExistingTopics,
-            answerMode,
+        if (capturedTab === 'file' && capturedFile) {
+          updateStep(genId, 'Reading file…')
+          const file = new FSFile(capturedFile.uri)
+          const base64 = await file.base64()
+          const result = await generateFromFile({
+            files: [{ fileData: base64, mimeType: capturedFile.mimeType, name: capturedFile.name }],
+            count: capturedCount,
+            title: capturedTitleHint || undefined,
+            existingTitles: capturedExistingTitles,
+            existingTopics: capturedExistingTopics,
+            answerMode: capturedAnswerMode,
           })
-        : generateFromFile({
-            files: filePayloads,
-            count: effectiveCount,
-            title: titleHint || undefined,
-            existingTitles: currentExistingTitles,
-            existingTopics: currentExistingTopics,
-            answerMode,
-          })
-
-      apiPromise
-        .then(async (result) => {
-          const finalTitle = titleHint || result.suggestedTitle || 'Untitled Deck'
-          const deckId = await saveDeckToFirestore(
-            currentUser,
-            result.cards,
-            finalTitle,
-            result.suggestedTopicName ?? null,
-            currentExistingTopics
+          cards = result.cards
+          suggestedTitle = result.suggestedTitle
+          suggestedTopicName = result.suggestedTopicName
+        } else {
+          const result = await streamFlashcards(
+            {
+              text: capturedText,
+              count: capturedCount,
+              title: capturedTitleHint || undefined,
+              existingTitles: capturedExistingTitles,
+              existingTopics: capturedExistingTopics,
+              answerMode: capturedAnswerMode,
+              ...(capturedSaveMaterial ? { saveMaterial: true } : {}),
+            },
+            (cardCount, targetCount, stepText) => {
+              updateStep(genId, stepText)
+              if (cardCount > 0 || targetCount > 0) {
+                updateCount(genId, cardCount, targetCount)
+              }
+            }
           )
-          resolveGeneration(genId, deckId, finalTitle, result.cards.length)
-        })
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err)
-          failGeneration(genId, message)
-        })
+          cards = result.cards
+          suggestedTitle = result.suggestedTitle
+          suggestedTopicName = result.suggestedTopicName
+        }
 
-      // Navigate immediately to Library tab
-      navigation.navigate('Main')
-    } catch (err: unknown) {
-      // Error before API call (e.g. file read error)
-      const message = err instanceof Error ? err.message : String(err)
-      setError(message)
-      failGeneration(genId, message)
+        const finalTitle = capturedTitleHint || suggestedTitle || 'Untitled Deck'
+        const deckId = await saveDeckToFirestore(
+          capturedUser,
+          cards,
+          finalTitle,
+          suggestedTopicName ?? null,
+          capturedExistingTopics
+        )
+        resolveGeneration(genId, deckId, finalTitle, cards.length)
+      } catch (err: unknown) {
+        const msg = (err as { message?: string }).message || 'Generation failed'
+        failGeneration(genId, msg)
+      }
     }
+
+    // Store retry function
+    setRetryFn(genId, () => {
+      updateStep(genId, 'Retrying…')
+      void doGenerate()
+    })
+
+    // Navigate immediately (fire-and-forget)
+    navigation.navigate('Main')
+
+    // Run generation in background
+    void doGenerate()
   }
 
   return (
@@ -334,15 +383,58 @@ export default function GenerateScreen() {
               </TouchableOpacity>
             ))}
           </View>
-          <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 16 }}>
+          <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 4 }}>
             {answerMode === 'brief' ? 'Short answers — great for memorization.' : 'Full explanations — better for complex topics.'}
           </Text>
+
+          {/* Save source material toggle */}
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.toggleLabel}>Save source material</Text>
+              <Text style={styles.toggleSubtext}>Helps improve AI results</Text>
+            </View>
+            <Switch
+              value={saveMaterial}
+              onValueChange={setSaveMaterial}
+              trackColor={{ false: colors.border, true: colors.coral }}
+              thumbColor={colors.text}
+            />
+          </View>
 
           <TouchableOpacity style={styles.generateBtn} onPress={handleGenerate}>
             <Text style={styles.generateBtnText}>Generate Flashcards</Text>
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Telemetry consent modal */}
+      <Modal
+        visible={consentModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => void handleTelemetryConsent(false)}
+      >
+        <View style={styles.consentOverlay}>
+          <View style={styles.consentCard}>
+            <Text style={styles.consentTitle}>Help improve Flipbloom</Text>
+            <Text style={styles.consentBody}>
+              Allow us to save your source material to improve AI results? You can change this anytime.
+            </Text>
+            <TouchableOpacity
+              style={styles.consentBtnPrimary}
+              onPress={() => void handleTelemetryConsent(true)}
+            >
+              <Text style={styles.consentBtnPrimaryText}>Yes, help out</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.consentBtnSecondary}
+              onPress={() => void handleTelemetryConsent(false)}
+            >
+              <Text style={styles.consentBtnSecondaryText}>No thanks</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -447,6 +539,18 @@ const styles = StyleSheet.create({
   countBtnActive: { backgroundColor: colors.coral + '22', borderColor: colors.coral },
   countBtnText: { fontSize: 14, color: colors.textMuted },
   countBtnTextActive: { color: colors.coral, fontWeight: '600' },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 12,
+  },
+  toggleLabel: { fontSize: 14, fontWeight: '600', color: colors.text },
+  toggleSubtext: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   generateBtn: {
     height: 52,
     backgroundColor: colors.coral,
@@ -455,4 +559,37 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   generateBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },
+  // Consent modal
+  consentOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  consentCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 14,
+  },
+  consentTitle: { fontSize: 18, fontWeight: '800', color: colors.text, textAlign: 'center' },
+  consentBody: { fontSize: 14, color: colors.textMuted, textAlign: 'center', lineHeight: 21 },
+  consentBtnPrimary: {
+    height: 48,
+    backgroundColor: colors.coral,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  consentBtnPrimaryText: { fontSize: 15, fontWeight: '700', color: colors.text },
+  consentBtnSecondary: {
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  consentBtnSecondaryText: { fontSize: 14, color: colors.textMuted },
 })
