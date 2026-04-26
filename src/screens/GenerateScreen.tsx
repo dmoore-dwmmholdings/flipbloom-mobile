@@ -104,6 +104,13 @@ export default function GenerateScreen() {
   const [consentModalVisible, setConsentModalVisible] = useState(false)
   const hasShownConsentRef = useRef(false)
 
+  // Sync saveMaterial with the user's global telemetry setting whenever profile loads/changes
+  useEffect(() => {
+    if (profile?.telemetryConsent !== undefined) {
+      setSaveMaterial(profile.telemetryConsent)
+    }
+  }, [profile?.telemetryConsent])
+
   useEffect(() => {
     const fetchExisting = async () => {
       if (!user) return
@@ -390,8 +397,22 @@ export default function GenerateScreen() {
           {/* Save source material toggle */}
           <View style={styles.toggleRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.toggleLabel}>Save source material</Text>
-              <Text style={styles.toggleSubtext}>Helps improve AI results</Text>
+              {profile?.telemetryConsent === true ? (
+                <>
+                  <Text style={styles.toggleLabel}>Opt out for this generation</Text>
+                  <Text style={styles.toggleSubtext}>Your default is to share source material</Text>
+                </>
+              ) : profile?.telemetryConsent === false ? (
+                <>
+                  <Text style={styles.toggleLabel}>Opt in for this generation</Text>
+                  <Text style={styles.toggleSubtext}>Your default is not to share source material</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.toggleLabel}>Save source material</Text>
+                  <Text style={styles.toggleSubtext}>Helps improve AI results</Text>
+                </>
+              )}
             </View>
             <Switch
               value={saveMaterial}
